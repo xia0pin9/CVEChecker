@@ -1,8 +1,6 @@
 package CVEChecker;
 
 import SourceParser.*;
-import org.anarres.cpp.CppReader;
-import org.anarres.cpp.Preprocessor;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -24,6 +22,13 @@ public class Main {
     private static List<String> abFiles = new ArrayList<>();
     private static HashMap<String, ArrayList> fileMapA = new HashMap<String, ArrayList>();
     private static HashMap<String, ArrayList> fileMapB = new HashMap<String, ArrayList>();
+    private static boolean showAll = false;
+    private static boolean showFunc =  false;
+    private static boolean showJava = false;
+//    private static HashSet<String> aFuncs = new HashSet<>();
+//    private static HashSet<String> bFuncs = new HashSet<>();
+    private static HashSet<String> funcs = new HashSet<>();
+    private static int round = 1;
 
     public static void main(String[] args) throws IOException {
         Options options = new Options();
@@ -34,6 +39,9 @@ public class Main {
         Option patchLink = new Option("p", "patchLink", true, "Patch url address");
         //patchLink.setRequired(true);
         options.addOption(patchLink);
+        options.addOption("a", "showAll", false, "Display all information");
+        options.addOption("f", "showFunc", false, "Display updated functions");
+        options.addOption("j", "showJava", false, "Display java patch info");
 
         CommandLineParser parser = new DefaultParser();
         HelpFormatter formatter = new HelpFormatter();
@@ -50,28 +58,37 @@ public class Main {
 
         String cveIdNumber = cmd.getOptionValue("cveId");
         String patchLinkString = cmd.getOptionValue("patchLink");
+        showAll = cmd.hasOption("a");
+        showFunc = cmd.hasOption("f");
+        showJava = cmd.hasOption("j");
 
         if (cveIdNumber != null) {
             getPatchLinks(cveIdNumber);
 
-            int round = 1;
             for (String link : patchLinks) {
                 processPatchLink(link, round);
                 round++;
-                System.out.println();
+                if (showAll)
+                    System.out.println();
             }
 
             if (patchLinks.size() == 0) {
-                System.out.println("Couldn't locate patch links");
+                if (showAll)
+                    System.out.println("Couldn't locate patch links");
             }
         } else if (patchLinkString != null) {
             processPatchLink(patchLinkString, 1);
         } else {
             formatter.printHelp("CVEChecker", options);
         }
-        
+
+        if (showFunc) {
+            for (String func : funcs) {
+                System.out.printf("-%s\n", func);
+            }
+        }
+
         return;
-        //System.out.println("Finished.");
     }
 
     private static void getPatchLinks(String cveNum) throws IOException {
@@ -111,7 +128,9 @@ public class Main {
         for (Element li : diffTree) {
             fileList.add(li.select("a").first().text());
         }
-        System.out.format("Update %d: %d file(s) changed, patch link: %s\n", round, fileList.size(), link);
+        if (showAll) {
+            System.out.format("Update %d: %d file(s) changed, patch link: %s\n", round, fileList.size(), link);
+        }
 
         HashSet<String> diffLinks = new HashSet<>();
         for (Element plink : plinks) {
@@ -125,29 +144,38 @@ public class Main {
         }
 
         if (fileMapA.size() == fileMapB.size() && abFiles.size() == abLinks.size()) {
-            System.out.println("Functions affected before patch: ");
+            if (showAll)
+                System.out.println("Functions affected before patch: ");
             for (int i = 0; i < abFiles.size(); i+=2) {
                 if (abFiles.get(i).endsWith(".h")) {
                     //System.out.printf("Header file skipped: %s\n", abFiles.get(i));
                     continue;
                 }
                 aRanges = fileMapA.get(abFiles.get(i));
-                System.out.printf("Update link: %s \n", abLinks.get(i));
-                processSourceFile(abFiles.get(i), abLinks.get(i), aRanges);
+                if (showAll)
+                    System.out.printf("Update link: %s \n", abLinks.get(i));
+                if (!abLinks.get(i+1).equals("/dev/null")) {
+                    processSourceFile(abFiles.get(i), abLinks.get(i), aRanges);
+                }
             }
 
-            System.out.println("Functions affected after patch: ");
+            if (showAll)
+                System.out.println("Functions affected after patch: ");
             for (int i = 0; i < abFiles.size(); i+=2) {
                 if (abFiles.get(i).endsWith(".h")) {
                     //System.out.printf("Header file skipped: %s\n", abFiles.get(i+1));
                     continue;
                 }
                 bRanges = fileMapB.get(abFiles.get(i+1));
-                System.out.printf("Update link: %s \n", abLinks.get(i+1));
-                processSourceFile(abFiles.get(i+1), abLinks.get(i+1), bRanges);
+                if (showAll)
+                    System.out.printf("Update link: %s \n", abLinks.get(i+1));
+                if (!abLinks.get(i+1).equals("/dev/null")) {
+                    processSourceFile(abFiles.get(i + 1), abLinks.get(i + 1), bRanges);
+                }
             }
         } else {
-            System.out.printf("Potential parser error: %d\n", link);
+            if (showAll)
+                System.out.printf("Potential parser error: %d\n", link);
         }
 
         fileMapA.clear();
@@ -161,8 +189,7 @@ public class Main {
         ArrayList<Integer> bRanges = new ArrayList<>();
         List<String> lineNums;
         String line;
-        String currentFileA = null;
-        String currentFileB = null;
+        String currentFile = null;
 
         Document diffDoc = Jsoup.connect(dlink).get();
         diffDoc = new Cleaner(Whitelist.basic()).clean(diffDoc);
@@ -172,26 +199,27 @@ public class Main {
             line = Parser.unescapeEntities(scanner.nextLine(), false);
 
             if (line.contains("diff --git")) {
+                int count = 0;
+                String temp = "";
                 Document tdoc = Jsoup.parseBodyFragment(line);
                 for (Element a : tdoc.select("a[href]")) {
-                    abLinks.add(a.attr("abs:href"));
+                    temp = a.attr("abs:href");
+                    currentFile = temp.split("/+/")[1];
+                    currentFile = currentFile.substring(currentFile.indexOf("/")+1);
+                    abLinks.add(temp);
+                    count++;
                 }
+                if (count != 2) abLinks.add("/dev/null");
             }
             if (line.startsWith("---")) {
-                if (aRanges.size() > 0 && currentFileA != null) {
-                    fileMapA.put(currentFileA, aRanges);
-                    aRanges = new ArrayList<>();
-                }
-                currentFileA = line.split("--- a/")[1];
-                abFiles.add(currentFileA);
+                fileMapA.put(currentFile, aRanges);
+                aRanges = new ArrayList<>();
+                abFiles.add(currentFile);
             }
             if (line.startsWith("+++")) {
-                if (bRanges.size() > 0 && currentFileB != null) {
-                    fileMapB.put(currentFileB, bRanges);
-                    bRanges = new ArrayList<>();
-                }
-                currentFileB = line.split("\\+\\+\\+ b/")[1];
-                abFiles.add(currentFileB);
+                fileMapB.put(currentFile, bRanges);
+                bRanges = new ArrayList<>();
+                abFiles.add(currentFile);
             }
             if (line.startsWith("<span>@@") && line.endsWith("@@")) {
                 line = line.replaceAll("[^0-9]+", " ").trim();
@@ -204,8 +232,8 @@ public class Main {
                 }
             }
         }
-        fileMapA.put(currentFileA, aRanges);
-        fileMapB.put(currentFileB, bRanges);
+        fileMapA.put(currentFile, aRanges);
+        fileMapB.put(currentFile, bRanges);
 
         scanner.close();
     }
@@ -217,10 +245,7 @@ public class Main {
         for (int i=0; i<ranges.size(); i+=2) {
             m = ranges.get(i);
             n = ranges.get(i+1);
-
-            if (!m.equals(n)) {
-                rangeList.add(new Pair(m, n));
-            }
+            rangeList.add(new Pair(m, n));
         }
 
         if (rangeList.size() > 0) {
@@ -233,8 +258,10 @@ public class Main {
                 InputStream inputStream = new ByteArrayInputStream(filterBase64Str);
                 ANTLRInputStream antlrInputStream = new ANTLRInputStream(inputStream);
                 CLexer cLexer = new CLexer(antlrInputStream);
+                cLexer.removeErrorListeners();
                 CommonTokenStream tokenStream = new CommonTokenStream(cLexer);
                 CParser cParser = new CParser(tokenStream);
+                cParser.removeErrorListeners();
                 ParseTree parseTree = cParser.compilationUnit();
 
                 CMethodVisitor cMethodVisitor = new CMethodVisitor();
@@ -246,14 +273,19 @@ public class Main {
                 ANTLRInputStream antlrInputStream = new ANTLRInputStream(inputStream);
 
                 CPP14Lexer cpp14Lexer = new CPP14Lexer(antlrInputStream);
+                cpp14Lexer.removeErrorListeners();
                 CommonTokenStream tokenStream = new CommonTokenStream(cpp14Lexer);
                 CPP14Parser cpp14Parser = new CPP14Parser(tokenStream);
+                cpp14Parser.removeErrorListeners();
                 ParseTree parseTree = cpp14Parser.translationunit();
 
                 CPPMethodVisitor cppMethodVisitor = new CPPMethodVisitor();
                 cppMethodVisitor.setRanges(fName, rangeList);
                 cppMethodVisitor.visit(parseTree);
-            } else if (fName.endsWith(".java")) {
+//                ParseTreeWalker walker = new ParseTreeWalker();
+//                CPP14Listerner cpp14Listerner = new CPP14Listerner(cpp14Parser);
+//                walker.walk(cpp14Listerner, parseTree);
+            } else if (showJava && fName.endsWith(".java")) {
                 InputStream inputStream = new ByteArrayInputStream(base64Str);
                 ANTLRInputStream antlrInputStream = new ANTLRInputStream(inputStream);
 
@@ -271,8 +303,7 @@ public class Main {
 
     private static byte[] filter(byte[] input) {
         StringBuilder sb = new StringBuilder();
-        String line = "", templine = "";
-        boolean commaline = false;
+        String line = "", tempLine = "";
         boolean multiline = false;
         String temp = "";
 
@@ -281,18 +312,18 @@ public class Main {
         while (scanner.hasNextLine()) {
             line = scanner.nextLine();
             if (line.endsWith("\\")) {
-                templine += line.replace("\\", "");
+                tempLine += line.replace("\\", "");
                 temp += "\r\n";
                 multiline = true;
             } else {
                 if (multiline == true && temp != "") {
-                    templine += line;
+                    tempLine += line;
                     temp += "\r\n";
-                    if (!templine.startsWith("#")) {
-                        sb.append(templine);
+                    if (!tempLine.startsWith("#")) {
+                        sb.append(tempLine);
                     }
                     sb.append(temp);
-                    templine = "";
+                    tempLine = "";
                     temp = "";
                     multiline = false;
                 } else {
@@ -369,7 +400,12 @@ public class Main {
 
             for (Pair<Integer, Integer> pair : this.ranges) {
                 if (pairCompare(new Pair<Integer, Integer>(start, end), pair)) {
-                    System.out.printf("Update func: %s, %s\n", currentFileName, currentFuncName);
+                    if (showAll) {
+                        System.out.printf("Update func: %s, %s\n", currentFileName, currentFuncName);
+                    }
+                    if (showFunc) {
+                        funcs.add(currentFuncName);
+                    }
                 }
             }
 
@@ -397,12 +433,19 @@ public class Main {
 
             for (Pair<Integer, Integer> pair : this.ranges) {
                 if (pairCompare(new Pair<Integer, Integer>(start, end), pair)) {
-                    System.out.printf("Update func: %s, %s\n", currentFileName, currentFuncName);
+                    if (showAll) {
+                        System.out.printf("Update func: %s, %s\n", currentFileName, currentFuncName);
+                    }
+                    if (showFunc) {
+                        // C code, only keep the func name
+                        funcs.add(currentFuncName.split("\\(")[0]);
+                    }
                 }
             }
             return null;
         }
     }
+
 
     static class CPPMethodVisitor extends CPP14BaseVisitor<Void> {
 
@@ -418,13 +461,19 @@ public class Main {
         @Override
         public Void visitFunctiondefinition(CPP14Parser.FunctiondefinitionContext ctx) {
             String currentFuncName = ctx.declarator().getText();
+//            String currentFuncName = ctx.declarator().noptrdeclarator().getText();
 
             start = ctx.getStart().getLine();
             end = ctx.getStop().getLine();
 
             for (Pair<Integer, Integer> pair : this.ranges) {
                 if (pairCompare(new Pair<Integer, Integer>(start, end), pair)) {
-                    System.out.printf("Update func: %s, %s\n", currentFileName, currentFuncName);
+                    if (showAll) {
+                        System.out.printf("Update func: %s, %s\n", currentFileName, currentFuncName);
+                    }
+                    if (showFunc) {
+                        funcs.add(currentFuncName);
+                    }
                 }
             }
 
